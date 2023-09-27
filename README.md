@@ -35,7 +35,7 @@ TBA
 
 ## Contact
 If you have any question, please send an email to \
-[[Dayeon Kim]()] - dyk4501@kaist.ac.kr.
+[[Dayeon Kim](https://github.com/dayna-k)] - dyk4501@kaist.ac.kr.
 
 ## License
 The source codes and datasets can be freely used for research and education only.  \
