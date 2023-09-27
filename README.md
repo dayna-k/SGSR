@@ -1,9 +1,13 @@
-# SGSR : A SALIENCY-GUIDED IMAGE SUPER-RESOLUTION NETWORK (ICIP2023)
+# SGSR : A Saliency-Guided Image Super-Resolution Network (ICIP 2023)
 
 [![ICIP2023](https://img.shields.io/badge/ICIP2023-Paper-<COLOR>.svg)](https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=10222146)
 
+**This is the official repository of [SGSR : A Saliency-Guided Image Super-Resolution Network](https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=10222146)**
 
-**This is the official repository of SGSR (A Saliency-Guided Image Super-Resolution Network)**
+
+([SGSR_eposter_ICIP2023.png](https://github.com/dayna-k/SGSR/blob/main/SGSR_eposter_ICIP2023.png)) 
+<img src="https://github.com/dayna-k/SGSR/blob/main/SGSR_eposter_ICIP2023.png"  width="" height="">
+
 
 ## Training
 TBA
