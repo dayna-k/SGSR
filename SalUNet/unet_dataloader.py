@@ -3,6 +3,7 @@ from __future__ import absolute_import
 from __future__ import division
 
 import sys
+import os
 import cv2
 import numpy as np
 import glob
@@ -58,8 +59,8 @@ def random_crop_flip(inp_img, out_img):
     """
     h, w = out_img.shape
 
-    rand_h = np.random.randint(h/8)
-    rand_w = np.random.randint(w/8)
+    rand_h = np.random.randint(max(1, h // 8))
+    rand_w = np.random.randint(max(1, w // 8))
     offset_h = 0 if rand_h == 0 else np.random.randint(rand_h)
     offset_w = 0 if rand_w == 0 else np.random.randint(rand_w)
     p0, p1, p2, p3 = offset_h, h+offset_h-rand_h, offset_w, w+offset_w-rand_w
@@ -131,21 +132,14 @@ class SODLoader(Dataset):
     """
     DataLoader for DUTS dataset (for training and testing).
     """
-    def __init__(self, mode='train', augment_data=False, target_size=96): # target_size=256 ## 384
-        if mode == 'train':
-            # self.inp_path = './data/DUTS/DUTS-TR/DUTS-TR-Image'
-            # self.out_path = './data/DUTS/DUTS-TR/DUTS-TR-Mask'
-            self.inp_path = 'D:/Dataset/COCO/train2017_crop_LR_x4_new'
-            self.out_path = 'D:/Dataset/COCO/train2017_crop_mask/mask_score_norm_x4'
-            
-        elif mode == 'test':
-            # self.inp_path = './data/DUTS/DUTS-TE/DUTS-TE-Image'
-            # self.out_path = './data/DUTS/DUTS-TE/DUTS-TE-Mask'
-            self.inp_path = 'D:/Dataset/COCO/val2017_crop_LR_x4_new'
-            self.out_path = 'D:/Dataset/COCO/val2017_crop_mask/mask_score_norm_x4'
-        else:
-            print("mode should be either 'train' or 'test'.")
-            sys.exit(0)
+    def __init__(self, mode='train', augment_data=False, target_size=96,
+                 image_dir=None, mask_dir=None):
+        if image_dir is None or mask_dir is None:
+            raise ValueError('Provide image_dir and mask_dir explicitly.')
+        self.inp_path = image_dir
+        self.out_path = mask_dir
+        if not os.path.isdir(image_dir) or not os.path.isdir(mask_dir):
+            raise FileNotFoundError('Check image and mask directories: {}, {}'.format(image_dir, mask_dir))
 
         self.augment_data = augment_data
         self.target_size = target_size
@@ -157,15 +151,31 @@ class SODLoader(Dataset):
             self.normalize,
         ])  # Not used
 
-        self.inp_files = sorted(glob.glob(self.inp_path + '/*'))
-        self.out_files = sorted(glob.glob(self.out_path + '/*'))
+        extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff', '.webp'}
+        self.inp_files = sorted(path for path in glob.glob(self.inp_path + '/*')
+                                if os.path.isfile(path) and os.path.splitext(path)[1].lower() in extensions)
+        if not self.inp_files:
+            raise ValueError('No supported training images in: {}'.format(self.inp_path))
+        self.out_files = [os.path.join(self.out_path, os.path.splitext(os.path.basename(path))[0] + '.png')
+                          for path in self.inp_files]
+        for path in self.out_files:
+            if not os.path.isfile(path):
+                raise FileNotFoundError('Missing score map: {}'.format(path))
 
     def __getitem__(self, idx):
         inp_img = cv2.imread(self.inp_files[idx])
+        if inp_img is None:
+            raise ValueError('Cannot read image: {}'.format(self.inp_files[idx]))
         inp_img = cv2.cvtColor(inp_img, cv2.COLOR_BGR2RGB)
         inp_img = inp_img.astype('float32')
 
         mask_img = cv2.imread(self.out_files[idx], 0)
+        if mask_img is None:
+            raise ValueError('Cannot read score map: {}'.format(self.out_files[idx]))
+        if mask_img.shape != inp_img.shape[:2]:
+            raise ValueError('LR score map and LR image must have matching dimensions: {}'.format(self.out_files[idx]))
+        if not np.any(mask_img):
+            raise ValueError('Score map must contain nonzero values: {}'.format(self.out_files[idx]))
         mask_img = mask_img.astype('float32')
         mask_img /= np.max(mask_img)
 

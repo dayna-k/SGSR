@@ -40,7 +40,9 @@ parser.add_argument('--results_folder', default='result/out/test59_atten', help=
 parser.add_argument('--pretrained_model', default='result/ckpt/generator_59.pt', help='save result')
 parser.add_argument('--pretrained_sal_path', default='./SalUNet/UNet_atten_new/best-model_epoch-389_mae-0.1335_loss-0.3685.pth', help='pretrained pfan path')
 
-parser.add_argument('--G_model', default='SGSR', help='G_model')
+parser.add_argument('--lpips_weights', default='LPIPS_models/weights/v0.1/alex.pth', help='LPIPS v0.1 AlexNet calibration checkpoint (see docs/inference.md)')
+
+parser.add_argument('--G_model', choices=['SGSR'], default='SGSR', help='G_model')
 parser.add_argument('--nBlock', type=int, default=16, help='number of RDB block')
 parser.add_argument('--nFeat', type=int, default=64, help='number of feature maps')
 parser.add_argument('--nChannel', type=int, default=3, help='number of color channels to use')
@@ -152,6 +154,12 @@ def rgb2y(rgb):
 
 
 def test(args):
+    for path in (args.pretrained_model, args.pretrained_sal_path, args.lpips_weights):
+        if not os.path.isfile(path):
+            raise FileNotFoundError('Missing checkpoint: {}. See docs/inference.md.'.format(path))
+    if not torch.cuda.is_available():
+        raise RuntimeError('Legacy evaluation requires CUDA; use inference.py --device cpu for image generation.')
+    torch.cuda.set_device(args.gpu)
     # SR network
     create_exp_dir(args.results_folder)
     #create_exp_dir(args.results_folder+"/gen")
@@ -174,7 +182,7 @@ def test(args):
     #  select network
     if args.G_model == 'SGSR':
         #generator_base = esrgan.GeneratorRRDB(channels=args.nChannel, filters=args.nFeat, num_res_blocks=args.nBlock, num_upsample=int(args.scale/2))
-        generator = sgsrnet.GeneratorRRDB_PFAN(channels=args.nChannel, filters=args.nFeat, num_res_blocks=args.nBlock, num_upsample=int(args.scale/2))
+        generator = sgsrnet.GeneratorRRDB_SGSR(channels=args.nChannel, filters=args.nFeat, num_res_blocks=args.nBlock, num_upsample=int(args.scale/2))
         pretrained_sal = unet_new.UNetAttenModel() 
     
     ################# load pretrained PFAN weights ##############################
@@ -197,7 +205,7 @@ def test(args):
     state_dict = torch.load(args.pretrained_model, map_location=torch.device("cpu"))
     new_state_dict = OrderedDict()
     for k, v in state_dict.items():
-        name = k[7:] # remove `module.`
+        name = k[7:] if k.startswith('module.') else k
         new_state_dict[name] = v
     generator.load_state_dict(new_state_dict)
     generator.cuda(device=args.gpu)
@@ -212,7 +220,7 @@ def test(args):
     print('G_num: ' + str(G_Numparams))
     
     testdataloader = get_testdataset(args)
-    loss_fn_alex = LPIPS_models.LPIPS(net='alex')
+    loss_fn_alex = LPIPS_models.LPIPS(net='alex', model_path=args.lpips_weights)
 
     avg_psnr = 0
     avg_psnr_mask_0 = 0
@@ -232,6 +240,8 @@ def test(args):
     num_test = 0
 
     for batch, (imgGT, imgIN, imgSEG) in enumerate(testdataloader):
+        if tuple(imgGT.shape[-2:]) != (384, 384) or tuple(imgIN.shape[-2:]) != (96, 96):
+            raise ValueError('Legacy evaluation requires 384x384 HR and 96x96 LR crops; use inference.py for other sizes.')
         with torch.no_grad():
 
             ## GT (3ch - Y Cb Cr)
@@ -431,6 +441,8 @@ def test(args):
                   % (num_test, ssim, psnr, lpips, psnr_mask_0, psnr_anti_mask_0, ssim_mask_0, ssim_anti_mask_0, area_0, psnr_mask_1, psnr_anti_mask_1, ssim_mask_1, ssim_anti_mask_1, lpips_mask_1, area_1))
 
 
+    if num_test == 0:
+        raise ValueError('No crops passed the legacy mask-area selection; see docs/inference.md.')
     sys.stdout.flush()
     logFile.write("[Test for %d images] [AVG-SSIM: %f, AVG-PSNR: %f, AVG-LPIPS: %f][(Mask0) PSNR: %f, %f, SSIM: %f, %f][(Mask1) PSNR: %f, %f, SSIM: %f, %f, LPIPS: %f] \n"
                   % (num_test, avg_ssim / num_test, avg_psnr / num_test, avg_lpips / num_test, avg_psnr_mask_0 / num_test, avg_psnr_anti_mask_0 / num_test, avg_ssim_mask_0 / num_test, avg_ssim_anti_mask_0 / num_test, avg_psnr_mask_1 / num_test, avg_psnr_anti_mask_1 / num_test, avg_ssim_mask_1 / num_test, avg_ssim_anti_mask_1 / num_test, avg_lpips_mask_1 / num_test))

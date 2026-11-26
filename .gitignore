@@ -1,2 +1,28 @@
+# Python environments and generated files
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Model weights and local datasets
 *.pth
-*.json
+*.pt
+*.ckpt
+/datasets/
+/checkpoints/
+
+# Experiment outputs (existing tracked records are retained)
+/results/
+/result/*
+!/result/ckpt/
+/result/ckpt/*
+!/result/ckpt/place_holder.txt
+/SalUNet/UNet_atten/
+/SalUNet/UNet_atten_new/COCO-x4/
+
+# Local editor / OS files
+.DS_Store
+.vscode/
+.idea/

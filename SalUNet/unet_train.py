@@ -12,38 +12,57 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from src.dataloader import SODLoader
-#from src.model import SODModel
-from src.unet import UNetAttenModel
-#from src.loss import EdgeSaliencyLoss, SalBCELoss
-from src.loss import SalBCELoss
+if __package__:
+    from .unet_dataloader import SODLoader
+    from .unet_new import UNetAttenModel
+    from .unet_loss import SalBCELoss
+else:
+    from unet_dataloader import SODLoader
+    from unet_new import UNetAttenModel
+    from unet_loss import SalBCELoss
+
+
+def str2bool(value):
+    if isinstance(value, bool):
+        return value
+    if value.lower() in ('true', '1', 'yes'):
+        return True
+    if value.lower() in ('false', '0', 'no'):
+        return False
+    raise argparse.ArgumentTypeError('Expected true or false.')
 
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Parameters to train your model.')
     parser.add_argument('--model', default="UNet_atten", help='Model to be used for training', type=str) 
     parser.add_argument('--epochs', default=400, help='Number of epochs to train the model for', type=int) # 391
-    parser.add_argument('--start_epoch', default=169, help='Number of epoch to start training the model', type=int)
+    parser.add_argument('--start_epoch', default=0, help='Number of epoch to start training the model', type=int)
     parser.add_argument('--bs', default=8, help='Batch size', type=int) # 6
     parser.add_argument('--lr', default=0.0004, help='Learning Rate', type=float)
     parser.add_argument('--wd', default=0., help='L2 Weight decay', type=float)
     parser.add_argument('--img_size', default=96, help='Image size to be used for training', type=int) # 256 ## 384
-    parser.add_argument('--aug', default=True, help='Whether to use Image augmentation', type=bool)
+    parser.add_argument('--aug', default=True, help='Whether to use Image augmentation', type=str2bool)
     parser.add_argument('--n_worker', default=2, help='Number of workers to use for loading data', type=int)
     parser.add_argument('--test_interval', default=1, help='Number of epochs after which to test the weights', type=int) # None
     parser.add_argument('--save_interval', default=1, help='Number of epochs after which to save the weights. If None, does not save', type=int) # None
-    parser.add_argument('--save_opt', default=True, help='Whether to save optimizer along with model weights or not', type=bool)
+    parser.add_argument('--save_opt', default=True, help='Whether to save optimizer along with model weights or not', type=str2bool)
     parser.add_argument('--log_interval', default=250, help='Logging interval (in #batches)', type=int)
     parser.add_argument('--res_mod', default=None, help='Path to the model to resume from', type=str)
     parser.add_argument('--res_opt', default=None, help='Path to the optimizer to resume from', type=str)
-    parser.add_argument('--use_gpu', default=True, help='Flag to use GPU or not', type=bool)
+    parser.add_argument('--use_gpu', default=True, help='Flag to use GPU or not', type=str2bool)
     parser.add_argument('--base_save_path', default='./UNet_atten/COCO-x4', help='Base path for the models to be saved', type=str) # './models'
     # Hyper-parameters for Loss
     parser.add_argument('--alpha_loss', default=0.7, help='weight for saliency loss', type=float)
     parser.add_argument('--wbce_w0', default=1.0, help='w0 for weighted BCE Loss', type=float)
     parser.add_argument('--wbce_w1', default=1.15, help='w1 for weighted BCE Loss', type=float)
 
+    parser.add_argument('--train_images', required=True, help='Training LR image directory')
+    parser.add_argument('--train_masks', required=True, help='Training LR score-map directory')
+    parser.add_argument('--val_images', required=True, help='Validation LR image directory')
+    parser.add_argument('--val_masks', required=True, help='Validation LR score-map directory')
     args = parser.parse_args()
+    if args.start_epoch and not args.res_mod:
+        parser.error('--start_epoch requires --res_mod; use --res_opt to restore Adam state too.')
 
     
 
@@ -96,7 +115,7 @@ class Engine:
             logFile.write('\n')
             logFile.flush()
 
-        if torch.cuda.is_available():
+        if self.use_gpu and torch.cuda.is_available():
             self.device = torch.device(device='cuda')
         else:
             self.device = torch.device(device='cpu')
@@ -117,17 +136,10 @@ class Engine:
             self.optimizer.load_state_dict(chkpt['optimizer'])
             print("Resuming training with optimizer : {}\n".format(self.res_opt_path))
         
-        if self.start_epoch == 169:
-            chkpt = torch.load(self.model_path + '/weights/model_epoch-168_mae-0.1558_loss-0.3628.pth', map_location=self.device)
-            self.model.load_state_dict(chkpt['model'])
-            print("Resuming training with checkpoint : {'/weights/model_epoch-168_mae-0.1558_loss-0.3628.pth'}")
-            opt_chkpt = torch.load(self.model_path + '/optimizers/opt_epoch-168_mae-0.1558_loss-0.3628.pth', map_location=self.device)
-            self.optimizer.load_state_dict(opt_chkpt['optimizer'])
-            print("Resuming training with optimizer : {'/optimizers/opt_epoch-168_mae-0.1558_loss-0.3628.pth'}\n")
-        
-
-        self.train_data = SODLoader(mode='train', augment_data=self.aug, target_size=self.img_size)
-        self.test_data = SODLoader(mode='test', augment_data=False, target_size=self.img_size)
+        self.train_data = SODLoader(mode='train', augment_data=self.aug, target_size=self.img_size,
+                                    image_dir=args.train_images, mask_dir=args.train_masks)
+        self.test_data = SODLoader(mode='test', augment_data=False, target_size=self.img_size,
+                                   image_dir=args.val_images, mask_dir=args.val_masks)
         self.train_dataloader = DataLoader(self.train_data, batch_size=self.bs, shuffle=True, num_workers=self.n_worker)
         self.test_dataloader = DataLoader(self.test_data, batch_size=self.bs, shuffle=False, num_workers=self.n_worker)
 

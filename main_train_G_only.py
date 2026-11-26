@@ -26,10 +26,19 @@ import time
 # import LPIPS_models
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "1, 2, 3" # "4, 5, 6"
 
 
-parser = argparse.ArgumentParser(description='super-resolution')
+
+def str2bool(value):
+    if isinstance(value, bool):
+        return value
+    if value.lower() in ('true', '1', 'yes'):
+        return True
+    if value.lower() in ('false', '0', 'no'):
+        return False
+    raise argparse.ArgumentTypeError('Expected true or false.')
+
+parser = argparse.ArgumentParser(description='SGSR x4 training (CUDA required)')
 
 # train data
 parser.add_argument('--GTdataDir', default='../../Dataset/COCO/train2017_crop_new', help='dataset directory')
@@ -45,17 +54,17 @@ parser.add_argument('--val_SEGdataDir', default='../../Dataset/COCO/val_small/ma
 parser.add_argument('--saveDir', default='./result', help='datasave directory')
 parser.add_argument('--results', default='./result/ESRGAN_UNet_0928_reduce_double', help='datasave directory')
 
-parser.add_argument('--G_model', default='ESRGAN_UNet', help='G_model')
+parser.add_argument('--G_model', choices=['SGSR'], default='SGSR', help='G_model')
 parser.add_argument('--D_model', default='ESRGAN', help='D_model')
 
-parser.add_argument('--need_patch', default=False, help='get patch form image')
-parser.add_argument('--RandInit', default=False, help='Rand Initialization')
+parser.add_argument('--need_patch', type=str2bool, default=False, help='get patch form image')
+parser.add_argument('--RandInit', type=str2bool, default=False, help='Rand Initialization')
 
 # network parameters
 parser.add_argument('--nBlock', type=int, default=16, help='number of RDB block')
-parser.add_argument('--nFeat', type=int, default=64, help='number of feature maps')
-parser.add_argument('--nChannel', type=int, default=3, help='number of color channels to use')
-parser.add_argument('--patchSize', type=int, default=96, help='patch size')  # output patch size
+parser.add_argument('--nFeat', type=int, choices=[64], default=64, help='number of feature maps')
+parser.add_argument('--nChannel', type=int, choices=[3], default=3, help='number of color channels to use')
+parser.add_argument('--patchSize', type=int, default=384, help='patch size')  # output patch size
 
 # training parameters
 parser.add_argument('--nThreads', type=int, default=16, help='number of threads for data loading')
@@ -68,9 +77,9 @@ parser.add_argument('--lrDecay', type=int, default=5, help='the epochs of half l
 parser.add_argument('--decayType', default='step', help='decay type')
 parser.add_argument('--start_epoch', type=int, default=0, help='start epoch')
 parser.add_argument('--start_iter', type=int, default=0, help='start iter')
-parser.add_argument('--start_with_iter', default=False, help='start with iter')
+parser.add_argument('--start_with_iter', type=str2bool, default=False, help='start with iter')
 
-parser.add_argument('--finetuned', default=False, help='fintuning')
+parser.add_argument('--finetuned', type=str2bool, default=False, help='fintuning')
 parser.add_argument('--finetune_path', default='', help='finetune_path')
 parser.add_argument('--pretrained_sal_path', default='./SalUNet/UNet_atten_new/best-model_epoch-389_mae-0.1335_loss-0.3685.pth', help='pretrained pfan path')
 
@@ -84,8 +93,8 @@ parser.add_argument("--warmup_batches", type=int, default=0, help="number of bat
 parser.add_argument("--sample_interval", type=int, default=1000, help="interval between saving image samples")
 parser.add_argument("--checkpoint_interval", type=int, default=15000, help="batch interval between model checkpoints")
 
-parser.add_argument('--scale', type=int, default=4, help='scale output size /input size')
-parser.add_argument('--multi-processing', default=True, help='use multi-gpu')
+parser.add_argument('--scale', type=int, choices=[4], default=4, help='scale output size /input size')
+parser.add_argument('--multi-processing', type=str2bool, default=True, help='use multi-gpu')
 parser.add_argument('--gpu', default=[1, 2, 3], help='gpu index')
 
 
@@ -144,6 +153,8 @@ def set_lr(args, epoch, optimizer, start_lr):
 
 def get_dataset(args):
     data_train = SR_train(args)
+    if len(data_train) < args.batchSize:
+        raise ValueError('Training images must be at least --batchSize (drop_last=True).')
     dataloader = torch.utils.data.DataLoader(data_train, batch_size=args.batchSize,
                                              drop_last=True, shuffle=True, num_workers=int(args.nThreads),
                                              pin_memory=False)
@@ -251,6 +262,10 @@ def test(args, model, pretrained_sal, dataloader, batches_done):
 
 
 def train(args):
+    if not torch.cuda.is_available():
+        raise RuntimeError('SGSR training requires CUDA. Select GPUs with CUDA_VISIBLE_DEVICES.')
+    if args.batchSize < 1:
+        raise ValueError('--batchSize must be positive.')
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -277,7 +292,8 @@ def train(args):
     # pretrained_pfan = torch.nn.DataParallel(pretrained_pfan)
     pretrained_sal.to("cuda")
     pretrained_sal.eval()
-    UNet_Numparams = count_parameters(pretrained_sal)
+    UNet_Numparams = sum(p.numel() for p in pretrained_sal.parameters())
+    pretrained_sal.requires_grad_(False)
     sys.stdout.flush()
     logFile.write('SAL_params: ' + str(UNet_Numparams) + '\n')
     logFile.flush()
@@ -308,7 +324,7 @@ def train(args):
             gen_chkpt = torch.load("%s/generator_%d_%d.pt" % (args.results, args.start_epoch, args.start_iter), map_location=torch.device("cpu"))
             state_dict = OrderedDict()
             for k, v in gen_chkpt.items():
-                name = k[7:] # remove `module.`
+                name = k[7:] if k.startswith('module.') else k
                 state_dict[name] = v
             generator.load_state_dict(state_dict)
             print("## Load Generator weights from ", "%s/generator_%d_%d.pt" % (args.results, args.start_epoch, args.start_iter))
@@ -319,7 +335,7 @@ def train(args):
             gen_chkpt = torch.load("%s/generator_%d.pt" % (args.results, args.start_epoch-1), map_location=torch.device("cpu"))
             state_dict = OrderedDict()
             for k, v in gen_chkpt.items():
-                name = k[7:] # remove `module.`
+                name = k[7:] if k.startswith('module.') else k
                 state_dict[name] = v
             generator.load_state_dict(state_dict)
             print("## Load Generator weights from %s/generator_%d.pt" % (args.results, args.start_epoch-1))
