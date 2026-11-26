@@ -7,8 +7,38 @@ import cv2
 import torch
 import torch.utils.data as data
 from PIL import Image
-import natsort
 
+
+_IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff', '.webp'}
+
+
+def image_files(directory):
+    if not os.path.isdir(directory):
+        raise FileNotFoundError('Image directory does not exist: {}'.format(directory))
+    names = sorted(name for name in os.listdir(directory)
+                   if os.path.splitext(name)[1].lower() in _IMAGE_EXTENSIONS
+                   and os.path.isfile(os.path.join(directory, name)))
+    if not names:
+        raise ValueError('No supported images found in: {}'.format(directory))
+    return names
+
+
+def read_triplet(nameGT, nameIN, nameSEG, scale, require_score=False):
+    imgGT = cv2.imread(nameGT, cv2.IMREAD_COLOR)
+    imgIN = cv2.imread(nameIN, cv2.IMREAD_COLOR)
+    imgSEG = cv2.imread(nameSEG, cv2.IMREAD_GRAYSCALE)
+    for path, img in [(nameGT, imgGT), (nameIN, imgIN), (nameSEG, imgSEG)]:
+        if img is None:
+            raise ValueError('Cannot read image: {}'.format(path))
+    if imgGT.shape[:2] != (imgIN.shape[0] * scale, imgIN.shape[1] * scale):
+        raise ValueError('HR must be {}x LR in each dimension: {} and {}'.format(scale, nameGT, nameIN))
+    if imgSEG.shape != imgGT.shape[:2]:
+        raise ValueError('Score map must match HR dimensions: {}'.format(nameSEG))
+    if any(size % 2 for size in imgIN.shape[:2]) or min(imgIN.shape[:2]) < 16:
+        raise ValueError('LR dimensions must be even and at least 16 pixels: {}'.format(nameIN))
+    if require_score and not np.any(imgSEG):
+        raise ValueError('Training score map must contain nonzero values: {}'.format(nameSEG))
+    return imgGT, imgIN, imgSEG
 
 
 def RGB_np2Tensor(imgGT, imgIN, imgSEG):
@@ -76,7 +106,7 @@ class SR_test(data.Dataset):
         self.dirIN = os.path.join(INapath)
         self.dirSEG = os.path.join(SEGapath)
 
-        self.fileList = os.listdir(self.dirGT)
+        self.fileList = image_files(self.dirGT)
         # self.fileList = natsort.natsorted(self.fileList)
 
         self.nTrain = len(self.fileList)
@@ -85,10 +115,7 @@ class SR_test(data.Dataset):
 
         nameGT, nameIN, nameSEG = self.getFileName(idx)
         # print(nameGT, nameIN)
-        imgIN = cv2.imread(nameIN, cv2.IMREAD_COLOR)
-        imgGT = cv2.imread(nameGT, cv2.IMREAD_COLOR)
-
-        imgSEG = cv2.imread(nameSEG, 0) # 0: read img as grayscale
+        imgGT, imgIN, imgSEG = read_triplet(nameGT, nameIN, nameSEG, self.scale)
         imgSEG_3c = np.zeros(imgGT.shape)
         imgSEG_3c[:, :, 0] = imgSEG
         imgSEG_3c[:, :, 1] = imgSEG
@@ -105,9 +132,9 @@ class SR_test(data.Dataset):
         #nameGT = os.path.join(self.dirGT, name)
         nameGT = self.dirGT+"/"+name
         # nameIN = os.path.join(self.dirIN, name[0:-4] + 'x4.png')
-        nameIN = self.dirIN + "/" + name[0:-4] + '.png'
+        nameIN = self.dirIN + "/" + os.path.splitext(name)[0] + '.png'
         #nameIN = os.path.join(self.dirIN, name)
-        nameSEG = self.dirSEG + "/" + name[0:-4] + '.png'
+        nameSEG = self.dirSEG + "/" + os.path.splitext(name)[0] + '.png'
 
         return nameGT, nameIN, nameSEG
 
@@ -127,7 +154,7 @@ class SR_train(data.Dataset):
         self.dirIN = os.path.join(INapath)
         self.dirSEG = os.path.join(SEGapath)
 
-        self.fileList = os.listdir(self.dirGT)
+        self.fileList = image_files(self.dirGT)
         self.nTrain = len(self.fileList)
         # self.json_data = self.get_json("train")
 
@@ -135,22 +162,8 @@ class SR_train(data.Dataset):
         #test 말고 train만
         nameGT, nameIN, nameSEG = self.getFileName(idx)
         # print("[ ",idx," ] nameGT: ", nameGT)
-        name = self.fileList[idx]
-        imgGT = cv2.imread(nameGT)
-        imgIN = cv2.imread(nameIN)
-        imgSEG = cv2.imread(nameSEG, 0)
-
-        # nameSEG, imgSEG = self.getSEGImg(idx)
-        
-        real_id = int(name[:-4].lstrip('0'))
-
-        if imgIN.any() == None:
-            print("No Input Img: ", nameIN)
-        if imgGT.any() == None:
-            print("No GT Img: ", nameGT)
-        if imgSEG.any() == None:
-            print("No SEG Img: ", nameSEG)
-        # imgGT, imgIN = getPatch(imgGT, imgIN, self.scale, self.patchsize)
+        imgGT, imgIN, imgSEG = read_triplet(
+            nameGT, nameIN, nameSEG, self.scale, require_score=True)
 
         # get augmentation
         imgGT, imgIN, imgSEG = augment(imgGT, imgIN, imgSEG)
@@ -170,8 +183,8 @@ class SR_train(data.Dataset):
         name = self.fileList[idx]
 
         nameGT = self.dirGT + "/" + name
-        nameIN = self.dirIN + "/" + name[0:-4] + '.png'
-        nameSEG = self.dirSEG + "/" + name[0:-4] + '.png'
+        nameIN = self.dirIN + "/" + os.path.splitext(name)[0] + '.png'
+        nameSEG = self.dirSEG + "/" + os.path.splitext(name)[0] + '.png'
 
         return nameGT, nameIN, nameSEG
 
